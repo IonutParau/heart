@@ -4,6 +4,7 @@ const lua = @cImport({
     @cInclude("lua/lualib.h");
     @cInclude("lua/lauxlib.h");
 });
+const clap = @import("zigclap");
 
 const Allocator = std.mem.Allocator;
 
@@ -16,6 +17,10 @@ const Dependency = struct {
 fn getDependencies(vm: *lua.lua_State, allocator: Allocator) ![]const Dependency {
     var deps = std.ArrayList(Dependency).init(allocator);
     var i: usize = 0;
+
+    if (!lua.lua_istable(vm, -1)) {
+        return deps.items;
+    }
 
     while (true) {
         i += 1;
@@ -37,8 +42,15 @@ fn getDependencies(vm: *lua.lua_State, allocator: Allocator) ![]const Dependency
         var default_module: [*c]const u8 = c_url;
         if (std.mem.lastIndexOf(u8, url, "/")) |idx| {
             var str = url[(idx + 1)..]; // for foo/bar, this is bar
-            var cstr = try allocator.allocSentinel(u8, str.len, 0);
+            var modulePref: []const u8 = "packages.";
+            var cstr = try allocator.allocSentinel(u8, str.len + modulePref.len, 0);
+            cstr.len = modulePref.len;
+            @memcpy(cstr, modulePref);
+            cstr.ptr += modulePref.len;
+            cstr.len = str.len;
             @memcpy(cstr, str);
+            cstr.len += modulePref.len;
+            cstr.ptr -= modulePref.len;
             default_module = cstr;
         }
         var c_module: [*c]const u8 = "";
@@ -124,6 +136,11 @@ pub fn getGlobalInfoDirectory(allocator: Allocator) !Dir {
     }
 }
 
+pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anytype) !void {
+    _ = vm;
+    try stdout.print("Downloading {s} for {s}\n", .{ dependency.url, dependency.module });
+}
+
 pub fn main() !void {
     const vm = lua.luaL_newstate().?;
     defer lua.lua_close(vm);
@@ -132,13 +149,25 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     defer _ = gpa.detectLeaks();
 
+    const params = comptime clap.parseParamsComptime(
+        \\-h, --help Display this help and exit.
+        \\<str>
+    );
+    var diag = clap.Diagnostic{};
+    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
+        .diagnostic = &diag,
+        .allocator = gpa.allocator(),
+    }) catch |err| {
+        diag.report(std.io.getStdErr().writer(), err) catch unreachable;
+        return err;
+    };
+    defer res.deinit();
+
     const allocator = gpa.allocator();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-
-    lua.luaL_openlibs(vm);
 
     if (lua.luaL_loadfilex(vm, "build.lua", "t") != 0) {
         std.debug.print("Unable to load build.lua file. Are you sure its there?\n", .{});
@@ -146,9 +175,20 @@ pub fn main() !void {
     }
 
     lua.lua_callk(vm, 0, 1, 0, null);
+    _ = lua.lua_getfield(vm, -1, "dependencies");
     var deps = try getDependencies(vm, arena_allocator);
+    _ = lua.lua_pop(vm, 1);
 
-    for (deps) |dep| {
-        std.debug.print("URL: {s} | Module: {s}\n", .{ dep.url, dep.module });
+    const stdout = std.io.getStdOut().writer();
+
+    if (res.positionals.len == 0) {
+        try clap.help(stdout, clap.Help, &params, .{});
+        return;
+    }
+
+    if (std.mem.eql(u8, res.positionals[0], "fetch")) {
+        for (deps) |dep| {
+            try fetchDependency(vm, dep, stdout);
+        }
     }
 }

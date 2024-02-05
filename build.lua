@@ -1,5 +1,8 @@
 return {
-    {
-        "IonutParau/AtomicUI",
+    dependencies = {
+        {
+            -- just a test dependency
+            "vrld/SUIT",
+        },
     },
 }

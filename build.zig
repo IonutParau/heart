@@ -24,6 +24,9 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const zigclap = b.dependency("zigclap", .{});
+    exe.addModule("zigclap", zigclap.module("clap"));
+
     // God, forgive me
     var luaCFiles = [_][]const u8{
         "include/lua/lapi.c",
