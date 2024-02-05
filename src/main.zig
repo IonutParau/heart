@@ -11,7 +11,6 @@ const Allocator = std.mem.Allocator;
 const Dependency = struct {
     url: []const u8,
     module: []const u8,
-    parts: []const []const u8,
 };
 
 fn getDependencies(vm: *lua.lua_State, allocator: Allocator) ![]const Dependency {
@@ -65,36 +64,9 @@ fn getDependencies(vm: *lua.lua_State, allocator: Allocator) ![]const Dependency
         module.ptr = c_module;
         module.len = std.mem.len(c_module);
 
-        var parts = std.ArrayList([]const u8).init(allocator);
-
-        _ = lua.lua_getfield(vm, -1, "parts");
-        if (lua.lua_istable(vm, -1)) {
-            var j: usize = 0;
-
-            while (true) {
-                _ = lua.lua_geti(vm, -1, @intCast(j));
-                if (lua.lua_isnoneornil(vm, -1)) {
-                    _ = lua.lua_pop(vm, 1);
-                    break;
-                }
-
-                var part: []const u8 = undefined;
-                var c_part = lua.lua_tolstring(vm, -1, null);
-                part.ptr = c_part;
-                part.len = std.mem.len(c_part);
-
-                try parts.append(part);
-
-                _ = lua.lua_pop(vm, 1);
-            }
-        } else {
-            _ = lua.lua_pop(vm, 1);
-        }
-
         try deps.append(Dependency{
             .url = url,
             .module = module,
-            .parts = parts.items,
         });
     }
 
