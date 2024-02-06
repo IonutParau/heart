@@ -137,14 +137,49 @@ fn gitUrl(url: []const u8, allocator: Allocator) ![]const u8 {
     return try std.mem.join(allocator, "", &[_][]const u8{ "https://github.com/", url });
 }
 
-pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anytype, allocator: Allocator) !void {
-    _ = vm;
+pub fn fetchSubdependencies(vm: *lua.lua_State, stdout: anytype, allocator: Allocator, dir_path: []const u8) !void {
+    var buildFilePath = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, "build.lua" });
+    defer allocator.free(buildFilePath);
+
+    var buildFilePathC = try allocator.allocSentinel(u8, buildFilePath.len, 0);
+    defer allocator.free(buildFilePathC);
+
+    @memcpy(buildFilePathC, buildFilePath);
+
+    if (std.fs.cwd().openFile(buildFilePath, std.fs.File.OpenFlags{})) |file| {
+        file.close();
+    } else |_| {
+        return;
+    }
+
+    if (lua.luaL_loadfilex(vm, buildFilePathC, "t") != 0) {
+        std.debug.print("Unable to load {s} file. Are you sure its there?\n", .{buildFilePath});
+        std.process.exit(1);
+    }
+
+    lua.lua_callk(vm, 0, 1, 0, null);
+    _ = lua.lua_getfield(vm, -1, "dependencies");
+    var deps = try getDependencies(vm, allocator);
+    _ = lua.lua_pop(vm, 1);
+
+    for (deps) |dep| {
+        try fetchDependency(vm, dep, stdout, allocator);
+    }
+}
+
+const FetchDependencyError = Allocator.Error || std.fs.File.WriteError || std.process.Child.SpawnError;
+
+pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anytype, allocator: Allocator) FetchDependencyError!void {
     try stdout.print("Downloading {s} for {s}\n", .{ dependency.url, dependency.module });
 
     // Resolve local path for cloning
     var local_path = try localPath(dependency.module, allocator);
     defer allocator.free(local_path);
     try stdout.print("Putting {s} into {s}\n", .{ dependency.module, local_path });
+
+    defer {
+        fetchSubdependencies(vm, stdout, allocator, local_path) catch unreachable;
+    }
 
     if (std.fs.cwd().openDir(local_path, std.fs.Dir.OpenDirOptions{})) |dir| {
         var dirAlias = dir;
@@ -185,6 +220,7 @@ pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anyty
 
 pub fn main() !void {
     const vm = lua.luaL_newstate().?;
+    _ = lua.luaL_openlibs(vm);
     defer lua.lua_close(vm);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -237,5 +273,13 @@ pub fn main() !void {
         for (deps) |dep| {
             try fetchDependency(vm, dep, stdout, arena_allocator);
         }
+    }
+
+    if (res.positionals[0] == Action.@"test") {
+        const testEnv = @embedFile("testenv.lua");
+        _ = lua.luaL_loadstring(vm, testEnv);
+        lua.lua_callk(vm, 0, 0, 0, null);
+        _ = lua.luaL_loadstring(vm, "require('tests.test') sayTestSucceeded()");
+        lua.lua_callk(vm, 0, 0, 0, null);
     }
 }
