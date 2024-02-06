@@ -108,9 +108,79 @@ pub fn getGlobalInfoDirectory(allocator: Allocator) !Dir {
     }
 }
 
-pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anytype) !void {
+fn localPath(lua_path: []const u8, allocator: Allocator) ![]const u8 {
+    var l = std.ArrayList([]const u8).init(allocator);
+    errdefer l.deinit();
+    var parts = std.mem.split(u8, lua_path, ".");
+    while (parts.next()) |part| {
+        try l.append(part);
+    }
+    return std.mem.join(allocator, std.fs.path.sep_str, l.items);
+}
+
+fn gitUrl(url: []const u8, allocator: Allocator) ![]const u8 {
+    // Is already a proper URL?
+    if (std.mem.count(u8, url, "://") > 0) {
+        // We alloc a copy cuz caller probably expects us to free
+        var buf = try allocator.alloc(u8, url.len);
+        @memcpy(buf, url);
+        return buf;
+    }
+
+    // Does it contain a .? Then it probably has a domain, so we just prepend https:// (all major git repos support cloning via HTTPS)
+    if (std.mem.count(u8, url, ".") > 0) {
+        var buf = try std.mem.join(allocator, "", &[_][]const u8{ "https://", url });
+        return buf;
+    }
+
+    // Fallback: Just add https://github.com/ in front, most repos are on github
+    return try std.mem.join(allocator, "", &[_][]const u8{ "https://github.com/", url });
+}
+
+pub fn fetchDependency(vm: *lua.lua_State, dependency: Dependency, stdout: anytype, allocator: Allocator) !void {
     _ = vm;
     try stdout.print("Downloading {s} for {s}\n", .{ dependency.url, dependency.module });
+
+    // Resolve local path for cloning
+    var local_path = try localPath(dependency.module, allocator);
+    defer allocator.free(local_path);
+    try stdout.print("Putting {s} into {s}\n", .{ dependency.module, local_path });
+
+    if (std.fs.cwd().openDir(local_path, std.fs.Dir.OpenDirOptions{})) |dir| {
+        var dirAlias = dir;
+        defer dirAlias.close();
+        try stdout.print("Directory {s} already exists! Pulling...\n", .{local_path});
+        var process = std.process.Child.init(&[_][]const u8{ "git", "pull" }, allocator);
+        process.cwd_dir = dirAlias;
+        var processTerm = try process.spawnAndWait();
+        const Status = std.process.Child.Term;
+        switch (processTerm) {
+            Status.Exited => |u| {
+                if (u != 0) {
+                    std.debug.panic("Pulling from {s} FAILED!\n", .{local_path});
+                }
+            },
+            else => {},
+        }
+        return;
+    } else |_| {}
+
+    // Resolve URL for cloning
+    var url = try gitUrl(dependency.url, allocator);
+    defer allocator.free(url);
+    try stdout.print("Cloning from {s}\n", .{url});
+
+    var process = std.process.Child.init(&[_][]const u8{ "git", "clone", url, local_path }, allocator);
+    var processTerm = try process.spawnAndWait();
+    const Status = std.process.Child.Term;
+    switch (processTerm) {
+        Status.Exited => |u| {
+            if (u != 0) {
+                std.debug.panic("Cloning {s} into {s} FAILED!\n", .{ url, local_path });
+            }
+        },
+        else => {},
+    }
 }
 
 pub fn main() !void {
@@ -123,10 +193,15 @@ pub fn main() !void {
 
     const params = comptime clap.parseParamsComptime(
         \\-h, --help Display this help and exit.
-        \\<str>
+        \\<action> An action to perform. Can be fetch to fetch dependencies, test to run tests, purge to purge unused dependencies or bundle to bundle to a
+        \\distributable file format.
     );
     var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
+    const Action = enum { fetch, purge, @"test", bundle };
+    const parsers = comptime .{
+        .action = clap.parsers.enumeration(Action),
+    };
+    var res = clap.parse(clap.Help, &params, parsers, .{
         .diagnostic = &diag,
         .allocator = gpa.allocator(),
     }) catch |err| {
@@ -158,9 +233,9 @@ pub fn main() !void {
         return;
     }
 
-    if (std.mem.eql(u8, res.positionals[0], "fetch")) {
+    if (res.positionals[0] == Action.fetch) {
         for (deps) |dep| {
-            try fetchDependency(vm, dep, stdout);
+            try fetchDependency(vm, dep, stdout, arena_allocator);
         }
     }
 }
