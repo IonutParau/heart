@@ -79,35 +79,6 @@ const Dir = std.fs.Dir;
 const OpenErr = std.fs.Dir.OpenError;
 const File = std.fs.File;
 
-pub fn getGlobalInfoDirectory(allocator: Allocator) !Dir {
-    const OsTag = std.Target.Os.Tag;
-    var target = std.zig.system.NativeTargetInfo.detect(std.zig.CrossTarget{}) catch std.debug.panic("I don't know on what kind of system I am running and I am scared\n", .{});
-    switch (target.target.os.tag) {
-        OsTag.linux => {
-            const homepath = if (std.os.getenv("HOME")) |home| home else return OpenErr.NotDir;
-            const folderpath = try std.fs.path.join(allocator, .{ homepath, "heart_tool" });
-            defer allocator.free(folderpath);
-
-            // I know there's better ways but I just don't care. If it works it works
-            if (std.fs.openDirAbsolute(folderpath, Dir.OpenDirOptions{})) |f| {
-                defer f.close();
-            } else |err| {
-                switch (err) {
-                    OpenErr.FileNotFound => {
-                        try std.fs.makeDirAbsolute(folderpath);
-                    },
-                    else => return err,
-                }
-            }
-
-            const dir = try std.fs.openDirAbsolute(folderpath, Dir.OpenDirOptions{});
-            return dir;
-        },
-        // unsupported platform so shit
-        else => std.debug.panic("Your running this on an unsupported platform. I don't know where to find what I need\n", .{}),
-    }
-}
-
 fn localPath(lua_path: []const u8, allocator: Allocator) ![]const u8 {
     var l = std.ArrayList([]const u8).init(allocator);
     errdefer l.deinit();
@@ -233,7 +204,7 @@ pub fn main() !void {
         \\distributable file format.
     );
     var diag = clap.Diagnostic{};
-    const Action = enum { fetch, purge, @"test", bundle };
+    const Action = enum { fetch, @"test", bundle };
     const parsers = comptime .{
         .action = clap.parsers.enumeration(Action),
     };
@@ -281,5 +252,20 @@ pub fn main() !void {
         lua.lua_callk(vm, 0, 0, 0, null);
         _ = lua.luaL_loadstring(vm, "require('tests.test') sayTestSucceeded()");
         lua.lua_callk(vm, 0, 0, 0, null);
+    }
+
+    if (res.positionals[0] == Action.bundle) {
+        const bundling = @import("bundling.zig");
+        var requires = try bundling.findRequires(vm, "require('src.main') require('test') require('all.these.tests')", arena_allocator);
+        defer arena_allocator.free(requires);
+        defer {
+            for (requires) |req| {
+                arena_allocator.free(req);
+            }
+        }
+
+        for (requires) |req| {
+            try stdout.print("{s}\n", .{req});
+        }
     }
 }
