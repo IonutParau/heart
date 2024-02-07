@@ -57,7 +57,6 @@ const fs = std.fs;
 
 pub fn addDependencies(vm: *lua.lua_State, store: *FileStore, path: []const u8, allocator: Allocator) !void {
     if (std.mem.count(u8, path, ".") == 0) {
-        std.debug.print("{s}\n", .{path});
         // Assume directory
         var dir = try fs.cwd().openIterableDir(path, fs.Dir.OpenDirOptions{});
         defer dir.close();
