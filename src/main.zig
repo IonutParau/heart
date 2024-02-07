@@ -256,16 +256,52 @@ pub fn main() !void {
 
     if (res.positionals[0] == Action.bundle) {
         const bundling = @import("bundling.zig");
-        var requires = try bundling.findRequires(vm, "require('src.main') require('test') require('all.these.tests')", arena_allocator);
-        defer arena_allocator.free(requires);
+        const FileStore = bundling.FileStore;
+        var store = FileStore.init(allocator);
+        defer store.deinit();
+
         defer {
-            for (requires) |req| {
-                arena_allocator.free(req);
+            var keys = store.keyIterator();
+            while (keys.next()) |key| {
+                defer allocator.free(key.*);
             }
         }
 
-        for (requires) |req| {
-            try stdout.print("{s}\n", .{req});
+        try bundling.addDependencies(vm, &store, "main.lua", allocator);
+        try bundling.addDependencies(vm, &store, "conf.lua", allocator);
+
+        var filec = store.count();
+
+        var keys = store.keyIterator();
+
+        while (keys.next()) |key| {
+            try stdout.print("Using: {s}\n", .{key.*});
+        }
+
+        const builtin = @import("builtin");
+        switch (builtin.target.os.tag) {
+            .windows => {},
+            .linux => {
+                _ = try stdout.write("Zipping...\n");
+                var cliArgs = try allocator.alloc([]const u8, filec + 3);
+                defer allocator.free(cliArgs);
+                cliArgs[0] = "/usr/bin/env";
+                cliArgs[1] = "zip";
+                cliArgs[2] = "Game.love";
+
+                var storeKeys = store.keyIterator();
+                var i: usize = 0;
+                while (storeKeys.next()) |key| {
+                    defer i += 1;
+
+                    cliArgs[i + 3] = key.*;
+                }
+
+                var zip = std.process.Child.init(cliArgs, allocator);
+                _ = try zip.spawnAndWait();
+                return;
+            },
+            else => {},
         }
     }
 }
