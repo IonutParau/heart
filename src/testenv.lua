@@ -127,6 +127,13 @@ function EnsuringContext:calledWith(...)
     }, {__index = FunctionContext})
 end
 
+function EnsuringContext:called()
+    return setmetatable({
+        f = self.val,
+        args = {},
+    }, {__index = FunctionContext})
+end
+
 function ensure(a)
     return setmetatable({val = a}, {__index = EnsuringContext})
 end

@@ -25,6 +25,9 @@ Here's an example test:
 ```lua
 test("5 is not equal to 3")
 ensure(5):isnt(3)
+
+test("math.floor is correct")
+ensure(math.floor):calledWith(5.3):succeedsAndValue():is(5)
 ```
 
 ## heart bundle
