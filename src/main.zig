@@ -280,7 +280,28 @@ pub fn main() !void {
 
         const builtin = @import("builtin");
         switch (builtin.target.os.tag) {
-            .windows => {},
+            .windows => {
+                _ = try stdout.write("Zipping...\n");
+                var cliArgs = try allocator.alloc([]const u8, filec + 3);
+                defer allocator.free(cliArgs);
+                cliArgs[0] = "cmd";
+                cliArgs[1] = "/C";
+                cliArgs[2] = "TAR";
+                cliArgs[3] = "-cf";
+                cliArgs[4] = "Game.love";
+
+                var storeKeys = store.keyIterator();
+                var i: usize = 0;
+                while (storeKeys.next()) |key| {
+                    defer i += 1;
+
+                    cliArgs[i + 5] = key.*;
+                }
+
+                var zip = std.process.Child.init(cliArgs, allocator);
+                _ = try zip.spawnAndWait();
+                return;
+            },
             .linux => {
                 _ = try stdout.write("Zipping...\n");
                 var cliArgs = try allocator.alloc([]const u8, filec + 3);
