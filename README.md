@@ -23,7 +23,7 @@ It runs `tests/test.lua` with a test environment ready to go.
 
 Here's an example test:
 ```lua
-test("5 is not equals to 3")
+test("5 is not equal to 3")
 ensure(5):isnt(3)
 ```
 
